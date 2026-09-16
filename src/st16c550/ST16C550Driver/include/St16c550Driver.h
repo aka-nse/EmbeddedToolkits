@@ -13,6 +13,7 @@ namespace embedded::st16c550
     /// @brief The platform abstraction interface for the ST16C550 driver.
     class ISt16c550Context
     {
+    protected:
         using size_t   = std::size_t;
         using uint8_t  = std::uint8_t;
         using uint32_t = std::uint32_t;
@@ -83,7 +84,7 @@ namespace embedded::st16c550
         ///     Creates a new instance of the ST16C550 driver.
         /// @param [in] context
         ///     The platform abstraction context for the ST16C550 driver.
-        St16c550Driver(std::unique_ptr<ISt16c550Context>&& context);
+        St16c550Driver(std::shared_ptr<ISt16c550Context> context);
 
         ~St16c550Driver();
 
@@ -184,7 +185,7 @@ namespace embedded::st16c550
 
         uint32_t                             const m_clock;
         volatile uint8_t*                    const m_baseAddress;
-        std::unique_ptr<ISt16c550Context>    const m_context;
+        std::shared_ptr<ISt16c550Context>    const m_context;
         platform::RingBuffer<RX_BUFFER_SIZE>       m_rxBuffer;
         platform::RingBuffer<TX_BUFFER_SIZE>       m_txBuffer;
 

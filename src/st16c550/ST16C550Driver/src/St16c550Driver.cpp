@@ -10,10 +10,10 @@ namespace embedded::st16c550
     void ISt16c550Context::on_transimitting() {}
     void ISt16c550Context::on_transmitted() {}
 
-    St16c550Driver::St16c550Driver(std::unique_ptr<ISt16c550Context>&& context)
+    St16c550Driver::St16c550Driver(std::shared_ptr<ISt16c550Context> context)
         : m_clock(context->clock())
         , m_baseAddress(context->base_address())
-        , m_context(std::move(context))
+        , m_context(context)
         , m_rxBuffer{}
         , m_txBuffer{}
         , m_opened(false)
