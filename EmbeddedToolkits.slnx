@@ -1,10 +1,1 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
-  </Configurations>
-  <Folder Name="/ST16C550/">
-    <Project Path="src/st16c550/ST16C550Driver.UnitTest/ST16C550Driver.UnitTest.vcxproj" Id="81632cbd-fe30-4886-86e5-28b02c6f9ea1" />
-    <Project Path="src/st16c550/ST16C550Driver/ST16C550Driver.vcxproj" Id="292317ba-9a02-43df-8637-1e93e847d8b5" />
-  </Folder>
-</Solution>
+<Solution />
