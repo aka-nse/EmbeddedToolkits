@@ -10,6 +10,7 @@
 
 namespace embedded::st16c550
 {
+#if __cplusplus >= 202002L || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
     template<class TPtr>
     concept UInt8Ptr = requires(TPtr ptr) {
         { ptr.operator*() } -> std::same_as<volatile std::uint8_t&>;
@@ -20,6 +21,9 @@ namespace embedded::st16c550
         { ptr.operator--(0) } -> std::same_as<TPtr>;
         { ptr.operator[](size_t) } -> std::same_as<TPtr&>;
     };
+#else
+#   define UInt8Ptr typename
+#endif
 
 
     /// @brief

@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(EmbeddedToolkits_Test)
-set(CMAKE_CXX_STANDARD 20)
 
 enable_testing()
 
@@ -11,7 +10,6 @@ file(
     CONFIGURE_DEPENDS
     src/*.cpp
 )
-add_executable(EmbeddedToolkits_Test ${EmbeddedToolkits_Test_sources})
 
 include(FetchContent)
 FetchContent_Declare(
@@ -23,11 +21,28 @@ if(WIN32)
 endif()
 FetchContent_MakeAvailable(googletest)
 
-target_link_libraries(
-    EmbeddedToolkits_Test
-    EmbeddedToolkits
-    GTest::gtest_main
-)
-
 include(GoogleTest)
-gtest_discover_tests(EmbeddedToolkits_Test)
+
+foreach(cxx_standard IN ITEMS 11 14 17 20)
+    set(target_name EmbeddedToolkits_Test_CXX${cxx_standard})
+
+    add_executable(${target_name} ${EmbeddedToolkits_Test_sources})
+    set_target_properties(
+        ${target_name}
+        PROPERTIES
+            CXX_STANDARD ${cxx_standard}
+            CXX_STANDARD_REQUIRED ON
+            CXX_EXTENSIONS OFF
+    )
+
+    target_link_libraries(
+        ${target_name}
+        EmbeddedToolkits
+        GTest::gtest_main
+    )
+
+    gtest_discover_tests(
+        ${target_name}
+        TEST_PREFIX CXX${cxx_standard}.
+    )
+endforeach()
