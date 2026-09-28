@@ -1,0 +1,13 @@
+root = true
+
+[*]
+charset = utf-8
+indent_size = 4
+indent_style = space
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cpp,h,hpp}]
+cpp_indent_namespace_contents = false
+cpp_space_before_namespace_open_brace = true

@@ -44,45 +44,61 @@ namespace embedded { namespace platform {
     template<std::size_t N>
     class RingBuffer
     {
+        friend class RingBufferTest;
+
         using uint8_t = std::uint8_t;
         using atomic_size_t = std::atomic_size_t;
 
+        static_assert(N >= 2, "RingBuffer size must be at least 2");
         static_assert((N & (N - 1)) == 0, "RingBuffer size must be a power of 2");
     public:
+        RingBuffer()
+            : m_head(0)
+            , m_tail(0)
+        {
+        }
+
         bool empty() const
         {
-            return m_head == m_tail;
+            return m_head.load(std::memory_order_acquire) ==
+                   m_tail.load(std::memory_order_relaxed);
         }
 
         bool full() const
         {
-            return m_head - m_tail == N;
+            return m_head.load(std::memory_order_relaxed) -
+                   m_tail.load(std::memory_order_acquire) == N;
         }
 
         size_t size() const
         {
-            return m_head - m_tail;
+            return m_head.load(std::memory_order_acquire) -
+                   m_tail.load(std::memory_order_acquire);
         }
 
         bool try_push(uint8_t value)
         {
-            if (full())
+            const size_t head = m_head.load(std::memory_order_relaxed);
+            const size_t tail = m_tail.load(std::memory_order_acquire);
+            if (head - tail == N)
             {
                 return false;
             }
-            // This operation requires atomicity, so this postfix-increment cannot be replaced by other expression.
-            m_buffer[m_head++ & (N - 1)] = value;
+            m_buffer[head & (N - 1)] = value;
+            m_head.store(head + 1, std::memory_order_release);
             return true;
         }
 
         bool try_pop(uint8_t& value)
         {
-            if (empty())
+            const size_t tail = m_tail.load(std::memory_order_relaxed);
+            const size_t head = m_head.load(std::memory_order_acquire);
+            if (head == tail)
             {
                 return false;
             }
-            // This operation requires atomicity, so this postfix-increment cannot be replaced by other expression.
-            value = m_buffer[m_tail++ & (N - 1)];
+            value = m_buffer[tail & (N - 1)];
+            m_tail.store(tail + 1, std::memory_order_release);
             return true;
         }
 
