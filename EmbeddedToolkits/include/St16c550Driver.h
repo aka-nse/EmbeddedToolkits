@@ -8,19 +8,7 @@
 #include "platform.h"
 
 
-namespace embedded::st16c550
-{
-    template<class TPtr>
-    concept UInt8Ptr = requires(TPtr ptr) {
-        { ptr.operator*() } -> std::same_as<volatile std::uint8_t&>;
-        { ptr.operator->() } -> std::same_as<volatile std::uint8_t*>;
-        { ptr.operator++() } -> std::same_as<TPtr&>;
-        { ptr.operator++(0) } -> std::same_as<TPtr>;
-        { ptr.operator--() } -> std::same_as<TPtr&>;
-        { ptr.operator--(0) } -> std::same_as<TPtr>;
-        { ptr.operator[](size_t) } -> std::same_as<TPtr&>;
-    };
-
+namespace embedded { namespace st16c550 {
 
     /// @brief
     ///     The platform abstraction interface for the ST16C550 driver.
@@ -43,20 +31,12 @@ namespace embedded::st16c550
         virtual platform::IBinarySemaphore& tx_semaphore() = 0;
 
         /// @brief
-        ///     Connects an interrupt handler to the RXRDY interrupt of the ST16C550.
+        ///     Connects an interrupt handler to the interrupt of the ST16C550.
         /// @param [in] handler
         /// @param [in] arg
         /// @return
         ///     Result status code. 0 for success, otherwise for error.
-        virtual int connect_intr_rxrdy(platform::InterruptHandler handler, void* arg) = 0;
-
-        /// @brief 
-        ///     Connects an interrupt handler to the THRE interrupt of the ST16C550.
-        /// @param [in] handler
-        /// @param [in] arg
-        /// @return
-        ///     Result status code. 0 for success, otherwise for error.
-        virtual int connect_intr_thre(platform::InterruptHandler handler, void* arg) = 0;
+        virtual int connect_intr(platform::InterruptHandler handler, void* arg) = 0;
 
         /// @brief
         ///     The event handler which is triggered when the ST16C550 starts to transmit data.
@@ -73,7 +53,7 @@ namespace embedded::st16c550
     /// @tparam TPtr
     ///     The pointer type for accessing the ST16C550 registers.
     ///     Typically, this is `volatile uint8_t*`, but smart pointers that implement the hooks are also acceptable.
-    template<UInt8Ptr TPtr = volatile uint8_t*>
+    template<EMBEDDEDTOOLKITS_CONCEPTS(platform::UInt8Ptr) TPtr = volatile uint8_t*>
     class St16c550Driver
     {
         using size_t   = std::size_t;
@@ -94,6 +74,27 @@ namespace embedded::st16c550
             PARITY_EVEN = 3,
         };
 
+        enum McrFlags
+        {
+            MCR_LOOPBACK = 0x10,
+            MCR_OP2      = 0x08,
+            MCR_OP1      = 0x04,
+            MCR_RTS      = 0x02,
+            MCR_DTR      = 0x01,
+        };
+
+        enum MsrFlags
+        {
+            MSR_CD        = 0x80,
+            MSR_RI        = 0x40,
+            MSR_DSR       = 0x20,
+            MSR_CTS       = 0x10,
+            MSR_DELTA_CD  = 0x08,
+            MSR_DELTA_RI  = 0x04,
+            MSR_DELTA_DSR = 0x02,
+            MSR_DELTA_CTS = 0x01,
+        };
+
 
         /// @brief
         ///     Creates a new instance of the ST16C550 driver.
@@ -105,7 +106,7 @@ namespace embedded::st16c550
         ///     The platform abstraction context for the ST16C550 driver.
         St16c550Driver(
             TPtr base_address,
-            uint8_t clock,
+            uint32_t clock,
             std::shared_ptr<ISt16c550Context> context)
             : m_baseAddress(base_address)
             , m_clock(clock)
@@ -113,8 +114,7 @@ namespace embedded::st16c550
             , m_rxBuffer{}
             , m_txBuffer{}
             , m_opened(false)
-            , m_rxrdy_connected(false)
-            , m_thre_connected(false)
+            , m_intr_connected(false)
         {
             if (
                 this->m_context == nullptr ||
@@ -153,20 +153,23 @@ namespace embedded::st16c550
                 throw std::invalid_argument("baud_rate must not be zero");
             }
 
-            if (!this->m_rxrdy_connected)
-            {
-                this->m_rxrdy_connected = (this->m_context->connect_intr_rxrdy(&St16c550Driver::handle_rxrdy_interrupt, this) == 0);
-            }
-
-            if (!this->m_thre_connected)
-            {
-                this->m_thre_connected = (this->m_context->connect_intr_thre(&St16c550Driver::handle_thre_interrupt, this) == 0);
-            }
-
             const uint32_t divisor = this->m_clock / (16u * baud_rate);
             if (divisor == 0 || divisor > 0xFFFFu)
             {
                 throw std::invalid_argument("baud_rate is out of range");
+            }
+
+            // disables every interrupts
+            this->set_reg(IER, 0);
+
+            if (!this->m_intr_connected)
+            {
+                this->m_intr_connected = (this->m_context->connect_intr(&St16c550Driver::handle_interrupt, this) == 0);
+            }
+
+            if(!this->m_intr_connected)
+            {
+                throw std::runtime_error("interrupt handler registration has been failed.");
             }
 
             uint8_t lineControl = LCR_WORD_LENGTH_8;
@@ -207,13 +210,17 @@ namespace embedded::st16c550
                 throw std::invalid_argument("unsupported parity");
             }
 
-            this->set_reg(IER, 0);
+            // sets up buffer queue
             this->set_reg(FCR, static_cast<uint8_t>(FCR_FIFO_ENABLE | FCR_RX_FIFO_RESET | FCR_TX_FIFO_RESET));
+
+            // configures clock
             this->set_reg(LCR, static_cast<uint8_t>(lineControl | LCR_DLAB));
-            this->set_reg(DLL, static_cast<uint8_t>(divisor & 0xFFu));
+            this->set_reg(DLL, static_cast<uint8_t>((divisor >> 0) & 0xFFu));
             this->set_reg(DLM, static_cast<uint8_t>((divisor >> 8) & 0xFFu));
             this->set_reg(LCR, lineControl);
-            this->set_reg(IER, this->m_rxrdy_connected ? IER_RXRDY : 0);
+
+            // enables RXRDY interrupt to receive data
+            this->set_reg(IER, IER_RXRDY | IER_RLS);
 
             this->m_opened = true;
         }
@@ -233,6 +240,54 @@ namespace embedded::st16c550
             this->m_opened = false;
         }
 
+        /// @brief
+        ///     Gets current baud rate.
+        /// @return
+        ///     The baud rate.
+        uint32_t get_baud_rate() const
+        {
+            uint8_t lcr, dll, dlm;
+            {
+                St16c550Driver* this_ = const_cast<St16c550Driver*>(this);
+                lcr = this_->get_reg(LCR);
+                this_->set_reg(LCR, lcr | LCR_DLAB);
+                dll = this_->get_reg(DLL);
+                dlm = this_->get_reg(DLM);
+                this_->set_reg(LCR, lcr & ~LCR_DLAB);
+            }
+            uint32_t divisor = (dlm << 8) | dll;
+            return m_clock / (16 * divisor);
+        }
+
+        /// @brief
+        ///     Sets MCR register value.
+        /// @param value
+        ///     The value to set to MCR register.
+        void set_mcr_reg(uint8_t value)
+        {
+            this->set_reg(MCR, value);
+        }
+
+
+        /// @brief
+        ///     Gets MCR register value.
+        /// @return
+        ///     MCR register value.
+        uint8_t get_mcr_reg() const
+        {
+            return this->get_reg(MCR);
+        }
+
+
+        /// @brief
+        ///     Gets MSR register value.
+        /// @return
+        ///     MSR register value.
+        uint8_t get_msr_reg() const
+        {
+            return this->get_reg(MSR);
+        }
+
 
         /// @brief
         ///     Writes data to the serial port.
@@ -240,11 +295,13 @@ namespace embedded::st16c550
         ///     The buffer containing the data to write.
         /// @param [in] size
         ///     The number of bytes to write.
+        /// @param [in] timeout_ms
+        ///     The timeout in milliseconds. If `timeout_ms` is zero, this function returns immediately without blocking.
         /// @return
         ///     The number of bytes actually written.
         /// @remarks
         ///     If TX buffer is full, this function returns `0` immediately instead of blocking.
-        size_t write(const uint8_t* buffer, size_t size)
+        size_t write(const uint8_t* buffer, size_t size, uint32_t timeout_ms = static_cast<uint32_t>(-1))
         {
             if (!this->m_opened || buffer == nullptr || size == 0)
             {
@@ -261,22 +318,35 @@ namespace embedded::st16c550
 
                 ++written;
             }
-
             if (written == 0)
             {
                 return 0;
             }
 
-            if (!this->m_context->tx_semaphore().try_acquire(static_cast<uint32_t>(-1)))
-            {
-                return 0;
-            }
+            // calls pre-transmit hook
             this->m_context->on_transimitting();
 
-            if (this->m_thre_connected)
+            // locks tx_semaphore to allow THRE handler to release it
+            this->m_context->tx_semaphore().try_acquire(0);
+
+            // enables THRE interrupt to start transmitting
+            this->set_flag(IER, IER_THRE, true);
+
+            // waits txBuffer to get empty
+            if (!this->m_context->tx_semaphore().try_acquire(timeout_ms))
             {
-                this->set_flag(IER, IER_THRE, true);
+                this->set_flag(IER, IER_THRE, false);
+                
+                uint8_t _;
+                while(this->m_txBuffer.try_pop(_))
+                {
+                    --written;
+                }
+                this->m_context->tx_semaphore().release();
             }
+
+            // calls post-transmit hook
+            this->m_context->on_transmitted();
 
             return written;
         }
@@ -294,7 +364,7 @@ namespace embedded::st16c550
         ///     The number of bytes actually read.
         /// @remarks
         ///     If `timeout_ms` is zero and RX buffer is empty, this function returns `0` immediately instead of blocking.
-        size_t read(uint8_t* buffer, size_t size, uint32_t timeout_ms)
+        size_t read(uint8_t* buffer, size_t size, uint32_t timeout_ms = static_cast<uint32_t>(-1))
         {
             if (!this->m_opened || buffer == nullptr || size == 0)
             {
@@ -305,9 +375,13 @@ namespace embedded::st16c550
             {
                 if (!this->m_context->rx_semaphore().try_acquire(timeout_ms))
                 {
+                    this->m_context->rx_semaphore().release();
                     return 0;
                 }
             }
+
+            // pauses RXRDY interrupt to take data from rxBuffer
+            this->set_flag(IER, IER_RXRDY, false);
 
             size_t readSize = 0;
             while (readSize < size)
@@ -321,6 +395,9 @@ namespace embedded::st16c550
                 buffer[readSize] = value;
                 ++readSize;
             }
+
+            // resumes RXRDY interrupt
+            this->set_flag(IER, IER_RXRDY, true);
 
             return readSize;
         }
@@ -356,15 +433,22 @@ namespace embedded::st16c550
             DLM = 1, ///< [w/r] Divisor Latch High (when DLAB=1)
         };
 
-        enum RegisterFlags
+        enum IerFlags
         {
             IER_RXRDY = 0x01,
             IER_THRE = 0x02,
+            IER_RLS = 0x4,
+        };
 
+        enum FcrFlags
+        {
             FCR_FIFO_ENABLE = 0x01,
             FCR_RX_FIFO_RESET = 0x02,
             FCR_TX_FIFO_RESET = 0x04,
+        };
 
+        enum LcrFlags
+        {
             LCR_WORD_LENGTH_5 = 0x00,
             LCR_WORD_LENGTH_6 = 0x01,
             LCR_WORD_LENGTH_7 = 0x02,
@@ -373,10 +457,31 @@ namespace embedded::st16c550
             LCR_PARITY_ENABLE = 0x08,
             LCR_EVEN_PARITY = 0x10,
             LCR_DLAB = 0x80,
-
-            LSR_DATA_READY = 0x01,
-            LSR_THR_EMPTY = 0x20,
         };
+
+        enum LsrFlags
+        {
+            LSR_DATA_READY = 0x01,
+            LSR_EOVERRUN   = 0x02,
+            LSR_EPARITY    = 0x04,
+            LSR_EFRAMING   = 0x08,
+            LSR_BREAK      = 0x10,
+            LSR_THR_EMPTY  = 0x20,
+            LSR_TR_EMPTY   = 0x40,
+            LSR_EFIFO      = 0x80,
+        };
+        
+        enum InterruptSource
+		{
+        	INTR_MASK          = 0xF,
+        	
+        	INTR_NO            = 0x1,
+			INTR_LSR           = 0x6,
+			INTR_RXRDY         = 0x4,
+			INTR_RXRDY_TIMEOUT = 0xC,
+			INTR_TXRDY         = 0x2,
+			INTR_MSR           = 0x0,
+		};
 
         uint32_t                             const m_clock;
         TPtr                                 const m_baseAddress;
@@ -385,8 +490,7 @@ namespace embedded::st16c550
         platform::RingBuffer<TX_BUFFER_SIZE>       m_txBuffer;
 
         bool m_opened;
-        bool m_rxrdy_connected;
-        bool m_thre_connected;
+        bool m_intr_connected;
 
 
         uint8_t get_reg(RegisterIndex index) const
@@ -401,14 +505,14 @@ namespace embedded::st16c550
         }
 
 
-        bool has_flag(RegisterIndex index, RegisterFlags flag) const
+        bool has_flag(RegisterIndex index, uint8_t flag) const
         {
             uint8_t value = this->m_baseAddress[index];
             return (value & flag) != 0;
         }
 
 
-        void set_flag(RegisterIndex index, RegisterFlags flag, bool value)
+        void set_flag(RegisterIndex index, uint8_t flag, bool value)
         {
             uint8_t regValue = this->m_baseAddress[index];
 
@@ -455,17 +559,6 @@ namespace embedded::st16c550
         }
 
 
-        static void handle_rxrdy_interrupt(void* arg)
-        {
-            if (arg == nullptr)
-            {
-                return;
-            }
-
-            static_cast<St16c550Driver*>(arg)->handle_rxrdy_interrupt();
-        }
-
-
         void handle_thre_interrupt()
         {
             if (!this->m_opened)
@@ -474,31 +567,51 @@ namespace embedded::st16c550
             }
 
             uint8_t value = 0;
-            if (!this->m_txBuffer.try_pop(value))
+            if (this->m_txBuffer.try_pop(value))
             {
-                this->set_flag(IER, IER_THRE, false);
-                this->m_context->on_transmitted();
-                this->m_context->tx_semaphore().release();
-                return;
+                this->set_reg(THR, value);
             }
+            else
+            {
+                // disables THRE interrupt to finish transmitting
+                this->set_flag(IER, IER_THRE, false);
 
-            this->set_reg(THR, value);
-            this->m_context->tx_semaphore().release();
+                // txBuffer got empty so releases blocked operation of `write`
+                this->m_context->tx_semaphore().release();
+            }
         }
 
 
-        static void handle_thre_interrupt(void* arg)
+        void handle_err_interrupt()
+        {
+        }
+
+
+        static void handle_interrupt(void* arg)
         {
             if (arg == nullptr)
             {
                 return;
             }
 
-            static_cast<St16c550Driver*>(arg)->handle_thre_interrupt();
+            auto this_ = static_cast<St16c550Driver*>(arg);
+            auto lsr = this_->get_reg(LSR);
+            if((lsr & LSR_THR_EMPTY) != 0)
+            {
+                this_->handle_thre_interrupt();
+            }
+            if((lsr & LSR_DATA_READY) != 0)
+            {
+                this_->handle_rxrdy_interrupt();
+            }
+            if((lsr & (LSR_EOVERRUN | LSR_EPARITY | LSR_EFRAMING | LSR_EFIFO)) != 0)
+            {
+                this_->handle_err_interrupt();
+            }
         }
 
-
     };
-}
+
+} }
 
 #endif /* EMBEDDEDTOOLKITS_ST16C550_DRIVER_H */
