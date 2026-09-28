@@ -6,11 +6,37 @@
     Provides basic synchronization primitives and utilities.
 */
 
+#if __cplusplus >= 202002L || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
+#   define EMBEDDEDTOOLKITS_LANGFEATURE_CONCEPTS 1
+#   define EMBEDDEDTOOLKITS_CONCEPTS(constraints) constraints
+#   include <concepts>
+#else
+#   define EMBEDDEDTOOLKITS_LANGFEATURE_CONCEPTS 0
+#   define EMBEDDEDTOOLKITS_CONCEPTS(constraints) typename
+#endif
 #include <atomic>
 #include <cstdint>
 
-namespace embedded::platform
-{
+namespace embedded { namespace platform {
+
+#if EMBEDDEDTOOLKITS_LANGFEATURE_CONCEPTS
+    template<class TPtr, class IndexType = std::ptrdiff_t>
+    concept UInt8Ptr =
+        std::integral<IndexType> &&
+        requires(TPtr ptr, IndexType n) {
+            { *ptr } -> std::same_as<volatile std::uint8_t&>;
+            { ptr[n] } -> std::same_as<volatile std::uint8_t&>;
+            { ++ptr } -> std::convertible_to<TPtr>;
+            { ptr++ } -> std::convertible_to<TPtr>;
+            { --ptr } -> std::convertible_to<TPtr>;
+            { ptr-- } -> std::convertible_to<TPtr>;
+            { ptr + n } -> std::convertible_to<TPtr>;
+            { ptr - n } -> std::convertible_to<TPtr>;
+        };
+    
+    static_assert(UInt8Ptr<volatile std::uint8_t*>);
+#endif
+
     /// @brief
     ///     Provides a fixed-size ring buffer (circular buffer) implementation.
     /// @tparam N
@@ -21,7 +47,7 @@ namespace embedded::platform
         using uint8_t = std::uint8_t;
         using atomic_size_t = std::atomic_size_t;
 
-        static_assert((N& (N - 1)) == 0, "RingBuffer size must be a power of 2");
+        static_assert((N & (N - 1)) == 0, "RingBuffer size must be a power of 2");
     public:
         bool empty() const
         {
@@ -44,8 +70,8 @@ namespace embedded::platform
             {
                 return false;
             }
-            m_buffer[m_head & (N - 1)] = value;
-            ++m_head;
+            // This operation requires atomicity, so this postfix-increment cannot be replaced by other expression.
+            m_buffer[m_head++ & (N - 1)] = value;
             return true;
         }
 
@@ -55,8 +81,8 @@ namespace embedded::platform
             {
                 return false;
             }
-            value = m_buffer[m_tail & (N - 1)];
-            ++m_tail;
+            // This operation requires atomicity, so this postfix-increment cannot be replaced by other expression.
+            value = m_buffer[m_tail++ & (N - 1)];
             return true;
         }
 
@@ -93,6 +119,7 @@ namespace embedded::platform
     /// @param [in] arg
     ///     A pointer to user-defined data passed to the handler.
     typedef void (*InterruptHandler)(void* arg);
-}
+
+} }
 
 #endif /* EMBEDDEDTOOLKITS_PLATFORM_H */
