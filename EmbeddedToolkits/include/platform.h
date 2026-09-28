@@ -49,6 +49,7 @@ namespace embedded { namespace platform {
         using uint8_t = std::uint8_t;
         using atomic_size_t = std::atomic_size_t;
 
+        static_assert(N >= 2, "RingBuffer size must be at least 2");
         static_assert((N & (N - 1)) == 0, "RingBuffer size must be a power of 2");
     public:
         RingBuffer()
